@@ -1,0 +1,15 @@
+# Python 运行环境
+Lib/
+Scripts/
+__pycache__/
+.verify_env/
+venv/
+.env
+pyvenv.cfg
+
+# 数据库文件
+*.db
+
+# 临时文件
+.vscode/
+results.csv
