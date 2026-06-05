@@ -27,7 +27,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 # ==========================================
 # 🌌 强效注入纯黑/暗色系极简科技 UI 风格
 # ==========================================
-st.set_page_config(page_title="youtube文案修改", layout="wide")
 
 st.markdown("""
     <style>
