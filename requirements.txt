@@ -4,5 +4,4 @@ pandas
 numpy
 youtube-transcript-api
 google-genai
-
-# sqlite3 is included in Python's standard library.
+requests

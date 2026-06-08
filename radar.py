@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import os
+import time
+import random
+import base64
+import requests
 from dataclasses import dataclass
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, time as dt_time, timedelta
 from typing import Any
 
 import pandas as pd
@@ -11,7 +16,8 @@ import yt_dlp
 SEARCH_LIMIT = 500
 MAX_VIDEOS_PER_KEYWORD = 200
 TOP_VIDEOS_PER_KEYWORD = 20
-CHANNEL_RECENT_VIDEO_LIMIT = 20
+# 【修改点1】云端运行降频：将频道历史视频提取量降为5，减少API请求压力，防封号
+CHANNEL_RECENT_VIDEO_LIMIT = 5 
 OUTPUT_FILE = "results.csv"
 
 CSV_COLUMNS = [
@@ -29,11 +35,14 @@ CSV_COLUMNS = [
     "url",
 ]
 
+# 【修改点2】加强防风控伪装：加入超时时间和真实浏览器 User-Agent
 YDL_OPTIONS: dict[str, Any] = {
     "quiet": True,
     "no_warnings": True,
     "ignoreerrors": True,
     "skip_download": True,
+    "socket_timeout": 60,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "extractor_args": {"youtube": {"skip": ["dash", "hls"]}},
 }
 
@@ -94,7 +103,7 @@ def parse_upload_date(value: Any) -> datetime | None:
     except ValueError:
         return None
 
-    return datetime.combine(parsed_date, time.min, tzinfo=UTC)
+    return datetime.combine(parsed_date, dt_time.min, tzinfo=UTC)
 
 
 def hours_since_publish(uploaded_at: datetime, now: datetime) -> float:
@@ -245,6 +254,11 @@ def get_channel_data(video: dict[str, Any]) -> ChannelData:
 
     if channel_url:
         try:
+            # 【修改点3】强制随机休眠3到6秒，防止频道连续请求被拦截
+            sleep_time = random.uniform(3, 6)
+            print(f"  [防风控] 正在休眠 {sleep_time:.1f} 秒，准备抓取频道：{video.get('channel', '')}")
+            time.sleep(sleep_time)
+            
             recent_videos = get_channel_recent_videos(str(channel_url))
             for recent in recent_videos:
                 if subscribers is None:
@@ -392,14 +406,61 @@ def export_results(rows: list[dict[str, Any]]) -> None:
     print(f"总导出数量：{len(df)}")
 
 
+# 【修改点4】新增 GitHub 自动同步函数
+def save_to_github(filename: str = OUTPUT_FILE) -> None:
+    token = os.environ.get("GIT_TOKEN")
+    if not token:
+        print("\n⚠️ 未配置 GIT_TOKEN 环境变量，已跳过 GitHub 云端同步。")
+        return
+
+    repo = "zefengh22-star/管流雷达" 
+    url = f"https://api.github.com/repos/{repo}/contents/{filename}"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+
+    # 1. 尝试获取原文件的 SHA（更新文件必须提供原文件的 SHA）
+    get_resp = requests.get(url, headers=headers)
+    sha = None
+    if get_resp.status_code == 200:
+        sha = get_resp.json().get("sha")
+
+    # 2. 读取并编码刚生成的 CSV 文件
+    try:
+        with open(filename, "rb") as f:
+            content = base64.b64encode(f.read()).decode("utf-8")
+    except FileNotFoundError:
+        print(f"\n❌ 找不到文件 {filename}，同步失败。")
+        return
+
+    # 3. 构造请求载荷并推送到 GitHub
+    data = {
+        "message": f"Auto-sync {filename} via HuggingFace Radar",
+        "content": content,
+        "branch": "main" 
+    }
+    if sha:
+        data["sha"] = sha
+
+    put_resp = requests.put(url, headers=headers, json=data)
+    
+    if put_resp.status_code in [200, 201]:
+        print(f"\n✅ 太棒了！{filename} 已成功备份至 GitHub 仓库 ({repo})，数据永久安全！")
+    else:
+        print(f"\n❌ GitHub 同步失败: 状态码 {put_resp.status_code}")
+        print(put_resp.text)
+
+
 def main() -> None:
-    print("YouTube 爆款发现雷达 V1.6")
+    print("YouTube 爆款发现雷达 V1.6 (云端防风控特化版)")
     _, cutoff = choose_time_range()
     keywords = read_keywords()
 
     if not keywords:
         print("未输入关键词，将生成空的 results.csv。")
         export_results([])
+        save_to_github(OUTPUT_FILE) # 即使为空，也覆盖一下云端
         return
 
     now = datetime.now(UTC)
@@ -409,6 +470,9 @@ def main() -> None:
         all_rows.extend(process_keyword(keyword, cutoff, now))
 
     export_results(all_rows)
+    
+    # 【修改点5】执行数据导出后，自动触发 GitHub 同传
+    save_to_github(OUTPUT_FILE)
 
 
 if __name__ == "__main__":
